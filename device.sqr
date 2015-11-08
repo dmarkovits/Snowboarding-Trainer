@@ -1,0 +1,143 @@
+readInterval <- 0.1; //sensor read interval
+cycleReads <- 10; // cycle reads for an output
+n <- 0;  //cycleRead index
+leanLimit <- 70;  //leanTreshold
+
+local DFArray = array(cycleReads);
+local DSArray = array(cycleReads);
+local SSArray = array(cycleReads);
+local SFArray = array(cycleReads);
+
+DFmin <- 3500; DFmax <-  5100;
+DSmin <-  3500; DSmax <-  9000;
+SSmin <-  0;    SSmax <- 1300;
+SFmin <-  9000; SFmax <- 45000;
+
+// 1 input
+pin1 <- hardware.pin1;
+pin1.configure(ANALOG_IN);
+// 2 input
+pin2 <- hardware.pin2;
+pin2.configure(ANALOG_IN);
+// 3 input
+pin3 <- hardware.pin5;
+pin3.configure(ANALOG_IN);
+//4 input
+pin4 <- hardware.pin7;
+pin4.configure(ANALOG_IN);
+
+function readSensorData() {
+    // Get source voltage, should be 3.3V
+    //local vRef = hardware.voltage();
+    
+    //read sensor values
+    local DF = pin1.read();
+    local DS = pin2.read();
+    local SS = pin3.read() * 5;
+    local SF = pin4.read() ;
+    server.log(format("Raw data: %f, %f, %f, %f", SF, SS, DF, DS));
+    
+    //normalize sensor limits
+    if (DF > DFmax) DFmax = DFmax + (DF - DFmax) / 5;
+    if (DS > DSmax) DSmax = DSmax + (DS - DSmax) / 5;
+    if (SF > SFmax) SFmax = SFmax + (SF - SFmax) / 5;
+    if (SS > SSmax) SSmax = SSmax + (SS - SSmax) / 5;
+   
+    if (DF < DFmin) DFmin = DFmin - (DFmin - DF) / 5;
+    if (DS < DSmin) DSmin = DSmin - (DSmin - DF) / 5;
+    if (SF < SFmin) SFmin = SFmin - (SFmin - SF) / 5;
+    if (SS < SSmin) SSmin = SSmin - (SSmin - SS) / 5;
+    
+    //normalize sensor values 0-100%
+    DF = (DF - DFmin) * 100 / (DFmax - DFmin);
+    DS = (DS - DSmin) * 100 / (DSmax - DSmin);
+    SF = (SF - SFmin) * 100 / (SFmax - SFmin);
+    SS = (SS - SSmin) * 100 / (SSmax - SSmin);
+    //server.log(format("Read[%f]: %f, %f, %f, %f", (n + 1), DF, DS, SF, SS));
+    
+    //add values to cycle reads arrays
+    DFArray[n] = DF;
+    DSArray[n] = DS;
+    SSArray[n] = SS;
+    SFArray[n] = SF;
+
+    if (n == (cycleReads-1)) {
+        //calculate cycle average
+        local avgDF = 0;
+        local avgDS = 0;
+        local avgSF = 0;
+        local avgSS = 0;
+        
+        for (local i = 0; i < cycleReads; i++) {
+            avgDF = avgDF + DFArray[i];
+            avgDS = avgDS + DSArray[i];
+            avgSF = avgSF + SFArray[i];
+            avgSS = avgSS + SSArray[i];
+            //server.log(format("%f", avgSS));
+        }
+        avgDF = avgDF / cycleReads;
+        avgDS = avgDS / cycleReads;
+        avgSF = avgSF / cycleReads;
+        avgSS = avgSS / cycleReads;
+        //server.log(format("cycleReads: %f", cycleReads));
+        //server.log(format("avgSS: %f", avgSS));
+       
+        //log cycle averages
+        server.log("___________________");
+        server.log("|        |        |");
+        server.log(format("|  %4i  |  %4i  |", avgSF, avgDF));
+        server.log("|        |        |");
+        server.log("|        |        |");
+        server.log(format("|  %4i  |  %4i  |", avgSS, avgDS));
+        server.log("|        |        |");
+        server.log("-------------------");
+        
+        //normalize values - this will do nothing if min & max were normalized
+        if (avgSF <= 0) avgSF = 1;
+        if (avgSS <= 0) avgSS = 1;
+        if (avgDF <= 0) avgDF = 1;
+        if (avgDS <= 0) avgDS = 1;
+        
+        local leftFan = 0;
+        local rightFan = 0;
+        //check for left lean
+        if (((avgSF + avgSS) > 30) && (((avgSF + avgSS) * 100 / (avgSF + avgSS + avgDF + avgDS)) > leanLimit)) {
+            leftFan = 1;
+        }
+        //check for right lean
+        if (((avgDF + avgDS) > 30) && (((avgDF + avgDS) * 100 / (avgSF + avgSS + avgDF + avgDS)) > leanLimit)) {
+            rightFan = 1;
+        }
+        
+        local forwardLeanWeight = (avgDF + avgSF) / 2 * 100 / ((avgDF + avgSF) / 2 + (avgSS + avgDS) / 2);
+        local backwardLeanWeight = (avgDS + avgSS) / 2 * 100 / ((avgDF + avgSF) / 2 + (avgSS + avgDS) / 2);
+        
+        //check for board ride lean
+        if ((leftFan + rightFan == 0) && ((avgDF + avgSF + avgSS + avgDS) > 50) && (forwardLeanWeight < leanLimit) && (backwardLeanWeight < leanLimit)) {
+            leftFan = 1;
+            rightFan = 1;
+        }
+        //write fan states
+        outX.write(leftFan);
+        outY.write(rightFan);
+        
+        //reset cycle read index (restart cycle)
+        n = 0;
+    } else {
+        //increment cycle read index
+        n++;
+    }
+
+    // Sleep until time to read sensor again
+    imp.wakeup(readInterval, readSensorData);
+}
+
+// X output pin
+outX <- hardware.pin9;
+outX.configure(DIGITAL_OUT, 0);
+// Y output pin
+outY <- hardware.pin8;
+outY.configure(DIGITAL_OUT, 0);
+
+// Start reading the sensors after 2 seconds
+imp.wakeup(2, readSensorData);
