@@ -1,0 +1,29 @@
+server.log("##########################################################")
+server.log("AGENT STARTED");
+server.log("##########################################################")
+local thingSpeakUrl = "http://api.thingspeak.com/update";
+
+local headers = {
+  "Content-Type" : "application/x-www-form-urlencoded",
+  "X-THINGSPEAKAPIKEY" : "VJWWDC0IFPLLYSSG"
+};
+
+local f1 = "field1";
+local f2 = "field2";
+local f3 = "field3";
+local f4 = "field4";
+local f5 = "field5";
+local f6 = "field6";
+local f7 = "field7";
+local f8 = "field8";
+
+function httpPostToThingSpeak (data) {
+  local request = http.post(thingSpeakUrl, headers, data);
+  local response = request.sendsync();
+  return response;
+}
+ 
+device.on("sendAccRead", function(data) {
+  local response = httpPostToThingSpeak(data);
+  //server.log(response.body);
+});
